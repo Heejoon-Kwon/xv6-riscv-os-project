@@ -80,9 +80,20 @@ usertrap(void)
   if(killed(p))
     kexit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  // timer interrupt
+  // update runtime and vruntime whenever a time interrupt happens
+  // update vdeadline and give up the CPU only when time slice is used up.
+  if(which_dev == 2){
+    if(p != 0){
+      eevdf_tick(p);
+
+      if(p->remain_slice <= 0){
+          p->remain_slice = BASE_SLICE;
+          eevdf_refresh_deadline(p);
+	  yield();
+      }
+    }
+  }
 
   prepare_return();
 
@@ -151,9 +162,22 @@ kerneltrap()
     panic("kerneltrap");
   }
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+  // timer interrupt
+  // update runtime and vruntime whenever time interrupt happens.
+  // update vdeadline and give up the CPU only when time slice is used up.
+  if(which_dev == 2){
+    struct proc *p = myproc();
+
+    if(p != 0 && p->state == RUNNING) {
+      eevdf_tick(p);
+
+      if(p->remain_slice <= 0){
+        p->remain_slice = BASE_SLICE;
+        eevdf_refresh_deadline(p);
+        yield();
+      }
+    }
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
@@ -172,9 +196,8 @@ clockintr()
   }
 
   // ask for the next timer interrupt. this also clears
-  // the interrupt request. 1000000 is about a tenth
-  // of a second.
-  w_stimecmp(r_time() + 1000000);
+  // the interrupt request adjusted to 100000
+  w_stimecmp(r_time() + 100000);
 }
 
 // check if it's an external interrupt or software interrupt,

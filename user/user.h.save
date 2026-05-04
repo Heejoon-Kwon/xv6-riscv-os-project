@@ -25,10 +25,10 @@ char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
 int getnice(int pid);
-int setnice(int pid, int value);
-void ps(int pid);
+int setnice(int p, int);
+void ps(int);
 uint64 meminfo(void);
-int waitpid(int pid);
+int waitpid(int);
 
 // ulib.c
 int stat(const char*, struct stat*);

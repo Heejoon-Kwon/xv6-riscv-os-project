@@ -6,6 +6,46 @@
 #include "proc.h"
 #include "defs.h"
 
+extern uint ticks;
+
+static int nice_to_weight[40] = {
+  88761, 71755, 56483, 46273, 36291,
+  29154, 23254, 18705, 14949, 11916,
+   9548,  7620,  6100,  4904,  3906,
+   3121,  2501,  1991,  1586,  1277,
+   1024,   820,   655,   526,   423,
+    335,   272,   215,   172,   137,
+    110,    87,    70,    56,    45,
+     36,    29,    23,    18,    15
+};
+
+struct eevdf_rq_stats {
+  uint64 v0;
+  uint64 sum_weight;
+  uint64 avg_numer;
+  int nr;
+};
+
+struct psrow {
+  char name[16];
+  int pid;
+  int state;
+  int nice;
+  int weight;
+  uint64 runtime_weight;
+  uint64 runtime;
+  uint64 vruntime;
+  uint64 vdeadline;
+  int eligible;
+  uint64 total_tick;
+};
+
+static int eevdf_on_rq(struct proc *p);
+static void eevdf_find_min_vruntime(struct eevdf_rq_stats *st);
+static void eevdf_calc_rq_stats(struct eevdf_rq_stats *st);
+static void eevdf_collect_rq_stats(struct eevdf_rq_stats *st);
+static int eevdf_is_eligible(struct proc *p, struct eevdf_rq_stats *st);
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -124,6 +164,18 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  
+  p->nice = NICE_DEFAULT;
+  p->weight = nice_to_weight[p->nice];
+
+  p->runtime = 0;
+  p->vruntime = 0;
+
+  p->remain_slice = BASE_SLICE;
+  p->eligible = 0;
+
+  p->vdeadline = p->vruntime + 
+                 ((uint64)BASE_SLICE * MILLI_TICK * NICE_20_WEIGHT) / p->weight;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -163,12 +215,19 @@ freeproc(struct proc *p)
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
+  p->nice = 20;
   p->parent = 0;
   p->name[0] = 0;
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->weight = 0;
+  p->runtime = 0;
+  p->vruntime = 0;
+  p->vdeadline = 0;
+  p->remain_slice = 0;
+  p->eligible = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -275,6 +334,14 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->nice = p->nice;
+  np->weight = nice_to_weight[np->nice];
+
+  np->runtime = 0;
+  np->vruntime = p->vruntime;
+  np->remain_slice = BASE_SLICE;
+  
+  eevdf_refresh_deadline(np);
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -414,50 +481,48 @@ kwait(uint64 addr)
   }
 }
 
-// Per-CPU process scheduler.
-// Each CPU calls scheduler() after setting itself up.
-// Scheduler never returns.  It loops, doing:
-//  - choose a process to run.
-//  - swtch to start running that process.
-//  - eventually that process transfers control
-//    via swtch back to the scheduler.
 void
 scheduler(void)
 {
   struct proc *p;
+  struct proc *best;
   struct cpu *c = mycpu();
+  struct eevdf_rq_stats st;
 
   c->proc = 0;
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
     intr_on();
-    intr_off();
 
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
+    best = 0;
+    eevdf_collect_rq_stats(&st);
+
+    for(p = proc; p < &proc[NPROC]; p++){
       acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+      if(p->state == RUNNABLE){
+        p->eligible = eevdf_is_eligible(p, &st);
+
+        if(p->eligible){
+          if(best == 0 || p->vdeadline < best->vdeadline){
+            if(best != 0)
+              release(&best->lock);
+            best = p;
+            continue;
+          }
+        }
+      } else {
+        p->eligible = 0;
       }
+
       release(&p->lock);
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
+
+    if(best != 0){
+      best->state = RUNNING;
+      c->proc = best;
+      swtch(&c->context, &best->context);
+      c->proc = 0;
+      release(&best->lock);
     }
   }
 }
@@ -579,6 +644,8 @@ wakeup(void *chan)
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
+	p->remain_slice = BASE_SLICE;
+	eevdf_refresh_deadline(p);
         p->state = RUNNABLE;
       }
       release(&p->lock);
@@ -599,7 +666,9 @@ kkill(int pid)
     if(p->pid == pid){
       p->killed = 1;
       if(p->state == SLEEPING){
-        // Wake process from sleep().
+        p->remain_slice = BASE_SLICE;
+        p->eligible = 0;
+        eevdf_refresh_deadline(p);
         p->state = RUNNABLE;
       }
       release(&p->lock);
@@ -688,3 +757,327 @@ procdump(void)
     printf("\n");
   }
 }
+
+int
+kgetnice(int pid)
+{
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->pid == pid){
+      int nice = p->nice;
+      release(&p->lock);
+      return nice;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+int
+ksetnice(int pid, int value)
+{
+  struct proc *p;
+
+  if(value < 0 || value > 39)
+    return -1;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->pid == pid){
+      p->nice = value;
+      p->weight = nice_to_weight[p->nice];
+      eevdf_refresh_deadline(p);
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+static void
+padded_print_str(char *s, int width)
+{
+  int len = 0;
+  for(char *p = s; *p; p++) len++;
+  printf("%s", s);
+  for(int i = len; i < width; i++) printf(" ");
+}
+
+static void
+padded_print_int(int n, int width)
+{
+  int len = 0;
+  int tmp = n;
+  if(tmp == 0) len = 1;
+  while(tmp > 0){ len++; tmp /= 10; }
+  printf("%d", n);
+  for(int i = len; i < width; i++) printf(" ");
+}
+
+static void
+padded_print_uint64(uint64 n, int width)
+{
+  int len = 0;
+  uint64 tmp = n;
+
+  if(tmp == 0)
+    len = 1;
+  while(tmp > 0){
+    len++;
+    tmp /= 10;
+  }
+
+  printf("%ld", n);
+  for(int i = len; i < width; i++)
+    printf(" ");
+}
+
+void
+kps(int pid)
+{
+  static char *states[] = {
+    [UNUSED]   "unused",
+    [USED]     "used",
+    [SLEEPING] "sleeping",
+    [RUNNABLE] "runnable",
+    [RUNNING]  "running",
+    [ZOMBIE]   "zombie"
+  };
+
+  struct proc *p;
+  struct eevdf_rq_stats st;
+
+  push_off();
+  
+  // pre-scan to check if it exists or not
+  if(pid != 0){
+    int found = 0;
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      if(p->state != UNUSED && p->pid == pid)
+        found = 1;
+      release(&p->lock);
+      if(found)
+        break;
+    }
+    if(!found){
+      pop_off();
+      return;
+    }
+  }
+
+  eevdf_collect_rq_stats(&st);
+  uint64 total_tick = (uint64)ticks * MILLI_TICK;
+
+  padded_print_str("name", 16);
+  padded_print_str("pid", 8);
+  padded_print_str("state", 12);
+  padded_print_str("priority", 10);
+  padded_print_str("runtime/weight", 16);
+  padded_print_str("runtime", 12);
+  padded_print_str("vruntime", 12);
+  padded_print_str("vdeadline", 12);
+  padded_print_str("is_eligible", 12);
+  printf("tick %ld \n", total_tick);
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    struct psrow row;
+    char *state;
+
+    acquire(&p->lock);
+
+    if(p->state == UNUSED || (pid != 0 && p->pid != pid)){
+      release(&p->lock);
+      continue;
+    }
+
+    safestrcpy(row.name, p->name, sizeof(row.name));
+    row.pid = p->pid;
+    row.state = p->state;
+    row.nice = p->nice;
+    row.runtime = p->runtime;
+    row.vruntime = p->vruntime;
+    row.vdeadline = p->vdeadline;
+    row.runtime_weight = (p->weight > 0) ? (p->runtime / p->weight) : 0;
+
+    if(eevdf_on_rq(p) && st.nr > 0 && st.sum_weight > 0)
+      row.eligible = eevdf_is_eligible(p, &st);
+    else
+      row.eligible = 0;
+
+    release(&p->lock);
+
+    if(row.state >= 0 && row.state < NELEM(states) && states[row.state])
+      state = states[row.state];
+    else
+      state = "unknown";
+
+    padded_print_str(row.name, 16);
+    padded_print_int(row.pid, 8);
+    padded_print_str(state, 12);
+    padded_print_int(row.nice, 10);
+    padded_print_uint64(row.runtime_weight, 16);
+    padded_print_uint64(row.runtime, 12);
+    padded_print_uint64(row.vruntime, 12);
+    padded_print_uint64(row.vdeadline, 12);
+    padded_print_str(row.eligible ?  "true" : "false", 12);
+    printf("\n");
+  }
+
+  pop_off();
+}
+  
+int
+kwaitpid(int pid)
+{
+  struct proc *pp;
+  struct proc *p = myproc();
+  int found;
+
+  acquire(&wait_lock); // child process can not wake up parent process, become waiting
+  for(;;){
+    found = 0;
+
+    for(pp = proc; pp < &proc[NPROC]; pp++){ // traversal
+      acquire(&pp->lock);
+
+      if(pp->state != UNUSED && pp->pid == pid){ // found
+        found = 1;
+
+        if(pp->parent != p){ // but not my child
+          release(&pp->lock);
+          release(&wait_lock);
+          return -1;
+        }
+
+        if(pp->state == ZOMBIE){ // already zombie
+          freeproc(pp);
+          release(&pp->lock);
+          release(&wait_lock);
+          return 0;
+        }
+
+        release(&pp->lock); // stop this traversal
+        break;
+      }
+
+      release(&pp->lock); // next process
+    }
+
+    if(!found || killed(p)){
+      release(&wait_lock);
+      return -1;
+    }
+
+    sleep(p, &wait_lock); // acquire wait lock -> acquire p lock -> release wait lock -> sleeping
+  }
+}
+
+void
+eevdf_tick(struct proc *p)
+{
+  if(p == 0)
+    return;
+
+  p->runtime += MILLI_TICK;
+  p->vruntime += (MILLI_TICK * NICE_20_WEIGHT) / p->weight;
+
+  if(p->remain_slice > 0)
+    p->remain_slice--;
+}
+
+static uint64
+eevdf_slice_delta(int weight)
+{
+  return ((uint64)BASE_SLICE * MILLI_TICK * NICE_20_WEIGHT) / weight;
+}
+
+void
+eevdf_refresh_deadline(struct proc *p)
+{
+  if(p == 0)
+    return;
+
+  p->vdeadline = p->vruntime + eevdf_slice_delta(p->weight);
+}
+
+static int
+eevdf_on_rq(struct proc *p)
+{
+  return p->state == RUNNABLE || p->state == RUNNING;
+}
+
+static void
+eevdf_find_min_vruntime(struct eevdf_rq_stats *st)
+{
+  struct proc *p;
+  int found = 0;
+
+  st->v0 = 0;
+  st->nr = 0;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(eevdf_on_rq(p)){
+      if(found == 0 || p->vruntime < st->v0)
+        st->v0 = p->vruntime;
+      found = 1;
+      st->nr++;
+    }
+    release(&p->lock);
+  }
+}
+
+
+static void
+eevdf_calc_rq_stats(struct eevdf_rq_stats *st)
+{
+  struct proc *p;
+
+  st->sum_weight = 0;
+  st->avg_numer = 0;
+
+  if(st->nr == 0)
+    return;
+
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(eevdf_on_rq(p)){
+      st->sum_weight += (uint64)p->weight;
+      st->avg_numer += (p->vruntime - st->v0) * (uint64)p->weight;
+    }
+    release(&p->lock);
+  }
+}
+
+static void
+eevdf_collect_rq_stats(struct eevdf_rq_stats *st)
+{
+  eevdf_find_min_vruntime(st);
+  eevdf_calc_rq_stats(st);
+}
+
+static int
+eevdf_is_eligible(struct proc *p, struct eevdf_rq_stats *st)
+{
+  uint64 rhs;
+
+  if(p == 0)
+    return 0;
+
+  if(st->nr == 0 || st->sum_weight == 0)
+    return 0;
+
+  if(!eevdf_on_rq(p))
+    return 0;
+
+  if(p->vruntime < st->v0)
+    return 0;
+
+  rhs = (p->vruntime - st->v0) * st->sum_weight;
+  return st->avg_numer >= rhs;
+}
+

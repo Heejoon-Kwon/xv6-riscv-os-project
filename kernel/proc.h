@@ -1,3 +1,11 @@
+#define NICE_MIN       0
+#define NICE_MAX       39
+#define NICE_DEFAULT   20
+
+#define BASE_SLICE     5
+#define MILLI_TICK     1000ULL
+#define NICE_20_WEIGHT 1024
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -91,6 +99,13 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  int nice;		       // Nice Value (0~39), default 20
+  int weight;		       // from hard-coded table
+  uint64 runtime;              // actual runtime
+  uint64 vruntime;             // virtual runtime
+  uint64 vdeadline;            // virtual deadline
+  int remain_slice;            // remaining time slice
+  int eligible;                // 0 or 1
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
