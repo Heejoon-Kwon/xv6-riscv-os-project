@@ -91,6 +91,7 @@ procinit(void)
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  mmapinit();
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->state = UNUSED;
@@ -210,6 +211,7 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  mmapfreeproc(p);
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -300,7 +302,7 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
-    if(sz + n > TRAPFRAME) {
+    if(sz + n < sz || sz + n > MMAPBASE) {
       return -1;
     }
     if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
@@ -334,6 +336,11 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+  if(mmapfork(p, np) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
   np->nice = p->nice;
   np->weight = nice_to_weight[np->nice];
 
@@ -397,6 +404,8 @@ kexit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  mmapfreeproc(p);
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
@@ -1080,4 +1089,3 @@ eevdf_is_eligible(struct proc *p, struct eevdf_rq_stats *st)
   rhs = (p->vruntime - st->v0) * st->sum_weight;
   return st->avg_numer >= rhs;
 }
-

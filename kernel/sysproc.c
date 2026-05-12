@@ -57,7 +57,7 @@ sys_sbrk(void)
     // memory, vmfault() will allocate it.
     if(addr + n < addr)
       return -1;
-    if(addr + n > TRAPFRAME)
+    if(addr + n > MMAPBASE)
       return -1;
     myproc()->sz += n;
   }
@@ -151,4 +151,35 @@ sys_waitpid(void)
   argint(0, &pid);
 
   return kwaitpid(pid);
+}
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int length, prot, flags, fd, offset;
+
+  argaddr(0, &addr);
+  argint(1, &length);
+  argint(2, &prot);
+  argint(3, &flags);
+  argint(4, &fd);
+  argint(5, &offset);
+
+  return kmmap(addr, length, prot, flags, fd, offset);
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+
+  argaddr(0, &addr);
+  return kmunmap(addr);
+}
+
+uint64
+sys_freemem(void)
+{
+  return freemem_pages();
 }

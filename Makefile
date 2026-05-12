@@ -53,7 +53,7 @@ TOOLPREFIX := $(shell if riscv64-unknown-elf-objdump -i 2>&1 | grep 'elf64-big' 
 endif
 
 QEMU = qemu-system-riscv64
-MIN_QEMU_VERSION = 7.2
+MIN_QEMU_VERSION = 6.2
 
 CC = $(TOOLPREFIX)gcc
 AS = $(TOOLPREFIX)gas
@@ -147,6 +147,7 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_mytest\
 	$U/_eevdf_test\
+	$U/_vm_test\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

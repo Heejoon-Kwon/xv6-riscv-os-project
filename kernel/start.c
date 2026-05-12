@@ -10,6 +10,12 @@ void timerinit();
 // entry.S needs one stack per CPU.
 __attribute__ ((aligned (16))) char stack0[4096 * NCPU];
 
+// a scratch area per CPU for machine-mode timer interrupts.
+uint64 timer_scratch[NCPU][5];
+
+// assembly code in kernelvec.S for machine-mode timer interrupt.
+extern void timervec();
+
 // entry.S jumps here in machine mode on stack0.
 void
 start()
@@ -30,7 +36,7 @@ start()
   // delegate all interrupts and exceptions to supervisor mode.
   w_medeleg(0xffff);
   w_mideleg(0xffff);
-  w_sie(r_sie() | SIE_SEIE | SIE_STIE);
+  w_sie(r_sie() | SIE_SEIE | SIE_STIE | SIE_SSIE);
 
   // configure Physical Memory Protection to give supervisor mode
   // access to all of physical memory.
@@ -48,19 +54,28 @@ start()
   asm volatile("mret");
 }
 
-// ask each hart to generate timer interrupts.
+// arrange to receive timer interrupts.
+// they will arrive in machine mode at timervec in kernelvec.S,
+// which turns them into software interrupts for devintr() in trap.c.
 void
 timerinit()
 {
-  // enable supervisor-mode timer interrupts.
-  w_mie(r_mie() | MIE_STIE);
-  
-  // enable the sstc extension (i.e. stimecmp).
-  w_menvcfg(r_menvcfg() | (1L << 63)); 
-  
-  // allow supervisor to use stimecmp and time.
-  w_mcounteren(r_mcounteren() | 2);
-  
-  // ask for the very first timer interrupt.
-  w_stimecmp(r_time() + 1000000);
+  int id = r_mhartid();
+  int interval = 100000;
+
+  *(uint64*)CLINT_MTIMECMP(id) = *(uint64*)CLINT_MTIME + interval;
+
+  // scratch[0..2] : space for timervec to save registers.
+  // scratch[3] : address of CLINT MTIMECMP register.
+  // scratch[4] : desired interval between timer interrupts.
+  uint64 *scratch = &timer_scratch[id][0];
+  scratch[3] = CLINT_MTIMECMP(id);
+  scratch[4] = interval;
+  w_mscratch((uint64)scratch);
+
+  w_mtvec((uint64)timervec);
+
+  // enable machine-mode interrupts and machine-mode timer interrupts.
+  w_mstatus(r_mstatus() | MSTATUS_MIE);
+  w_mie(r_mie() | MIE_MTIE);
 }

@@ -69,7 +69,7 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else if((r_scause() == 15 || r_scause() == 13) &&
-            vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
+            vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) == 1) {
     // page fault on lazily-allocated page
   } else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
@@ -194,10 +194,6 @@ clockintr()
     wakeup(&ticks);
     release(&tickslock);
   }
-
-  // ask for the next timer interrupt. this also clears
-  // the interrupt request adjusted to 100000
-  w_stimecmp(r_time() + 100000);
 }
 
 // check if it's an external interrupt or software interrupt,
@@ -231,12 +227,13 @@ devintr()
       plic_complete(irq);
 
     return 1;
-  } else if(scause == 0x8000000000000005L){
-    // timer interrupt.
+  } else if(scause == 0x8000000000000001L){
     clockintr();
+
+    w_sip(r_sip() & ~2);
+
     return 2;
   } else {
     return 0;
   }
 }
-

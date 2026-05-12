@@ -57,9 +57,11 @@ void            ireclaim(int);
 
 // kalloc.c
 void*           kalloc(void);
+void            kaddref(void *);
 void            kfree(void *);
 void            kinit(void);
 uint64		freemem_bytes(void);
+int             freemem_pages(void);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -108,6 +110,8 @@ void   		kps(int pid);
 int		kwaitpid(int pid);
 void     	eevdf_tick(struct proc *p);
 void	    	eevdf_refresh_deadline(struct proc *p);
+void            mmapfreeproc(struct proc *);
+int             mmapfork(struct proc *, struct proc *);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -175,7 +179,10 @@ int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             ismapped(pagetable_t, uint64);
-uint64          vmfault(pagetable_t, uint64, int);
+int             vmfault(pagetable_t, uint64, int);
+void            mmapinit(void);
+uint64          kmmap(uint64, int, int, int, int, int);
+int             kmunmap(uint64);
 
 // plic.c
 void            plicinit(void);
