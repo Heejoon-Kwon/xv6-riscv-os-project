@@ -24,6 +24,8 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
 // only one device
+int nr_sectors_read;
+int nr_sectors_write;
 struct superblock sb; 
 
 // Read the super block.
@@ -69,9 +71,9 @@ balloc(uint dev)
   struct buf *bp;
 
   bp = 0;
-  for(b = 0; b < sb.size; b += BPB){
+  for(b = 0; b < SWAPBASE; b += BPB){
     bp = bread(dev, BBLOCK(b, sb));
-    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
+    for(bi = 0; bi < BPB && b + bi < SWAPBASE; bi++){
       m = 1 << (bi % 8);
       if((bp->data[bi/8] & m) == 0){  // Is block free?
         bp->data[bi/8] |= m;  // Mark block in use.
@@ -694,4 +696,43 @@ struct inode*
 nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
+}
+
+// pa4: swapread
+void
+swapread(uint64 ptr, int blkno)
+{
+  struct buf *bp;
+  int i;
+  const int BLKS_PER_PG = PGSIZE/BSIZE;
+
+  if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
+    panic("swapread: blkno exceeded range");
+
+  for(i = 0; i < BLKS_PER_PG; i++){
+    nr_sectors_read++;
+    bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
+    memmove((void*)(ptr + i * BSIZE), bp->data, BSIZE);
+    brelse(bp);
+  }
+}
+
+// pa4: swapwrite
+void
+swapwrite(uint64 ptr, int blkno)
+{
+  struct buf *bp;
+  int i;
+  const int BLKS_PER_PG = PGSIZE / BSIZE;
+
+  if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
+    panic("swapwrite: blkno exceeded range");
+
+  for(i = 0; i < BLKS_PER_PG; i++){
+    nr_sectors_write++;
+    bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
+    memmove(bp->data, (void*)(ptr + i * BSIZE), BSIZE);
+    bwrite(bp);
+    brelse(bp);
+  }
 }

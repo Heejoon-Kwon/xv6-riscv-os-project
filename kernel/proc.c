@@ -124,9 +124,11 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  release(&p->lock);
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+    acquire(&p->lock);
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -135,10 +137,13 @@ found:
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
+    acquire(&p->lock);
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+
+  acquire(&p->lock);
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -287,9 +292,11 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
+  release(&np->lock);
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    acquire(&np->lock);
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -311,8 +318,6 @@ fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
-
-  release(&np->lock);
 
   acquire(&wait_lock);
   np->parent = p;

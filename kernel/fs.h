@@ -7,7 +7,7 @@
 
 // Disk layout:
 // [ boot block | super block | log | inode blocks |
-//                                          free bit map | data blocks]
+//                         free bit map | data blocks | swap blocks]
 //
 // mkfs computes the super block and builds an initial file system. The
 // super block describes the disk layout:
@@ -58,3 +58,7 @@ struct dirent {
   char name[DIRSIZ];
 };
 
+
+
+extern int nr_sectors_read;
+extern int nr_sectors_write;

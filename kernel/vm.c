@@ -117,8 +117,17 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  if((*pte & PTE_V) == 0){
+    if(PTE_SWAPPED(*pte)){
+      if(swapin(pagetable, PGROUNDDOWN(va)) < 0)
+        return 0;
+      pte = walk(pagetable, va, 0);
+      if(pte == 0 || (*pte & PTE_V) == 0)
+        return 0;
+    } else {
+      return 0;
+    }
+  }
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
@@ -163,6 +172,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+    if(perm & PTE_U)
+      page_lru_add(pagetable, a, pa);
     if(a == last)
       break;
     a += PGSIZE;
@@ -186,10 +197,17 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
+    if(PTE_SWAPPED(*pte)){
+      swap_slot_free(PTE2PA(*pte) >> PGSHIFT);
+      *pte = 0;
+      continue;
+    }
     if((*pte & PTE_V) == 0)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
+    if(*pte & PTE_U)
+      page_lru_remove(PTE2PA(*pte));
     if(do_free){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
@@ -315,18 +333,30 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
+  int swappable;
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
+    if(PTE_SWAPPED(*pte)){
+      if(swapin(old, i) < 0)
+        goto err;
+      if((pte = walk(old, i, 0)) == 0)
+        panic("uvmcopy: pte should exist");
+    }
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
+    swappable = flags & PTE_U;
+    if(swappable)
+      page_lru_remove(pa);
     if((mem = kalloc()) == 0)
-      goto err;
+      goto err_readd;
     memmove(mem, (char*)pa, PGSIZE);
+    if(swappable)
+      page_lru_add(old, i, pa);
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
       kfree(mem);
       goto err;
@@ -337,6 +367,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+
+ err_readd:
+  if(swappable)
+    page_lru_add(old, i, pa);
+  goto err;
 }
 
 // mark a PTE invalid for user access.
@@ -349,6 +384,15 @@ uvmclear(pagetable_t pagetable, uint64 va)
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
+  if(PTE_SWAPPED(*pte)){
+    if(swapin(pagetable, va) < 0)
+      panic("uvmclear: swapin");
+    pte = walk(pagetable, va, 0);
+    if(pte == 0)
+      panic("uvmclear");
+  }
+  if((*pte & PTE_V) && (*pte & PTE_U))
+    page_lru_remove(PTE2PA(*pte));
   *pte &= ~PTE_U;
 }
 
@@ -366,6 +410,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
+    if(pte && PTE_SWAPPED(*pte)){
+      if(swapin(pagetable, va0) < 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+    }
     if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
        (*pte & PTE_W) == 0)
       return -1;

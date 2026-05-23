@@ -65,6 +65,13 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 12 || r_scause() == 13 || r_scause() == 15){
+    intr_on();
+    if(r_stval() >= p->sz || swapin(p->pagetable, r_stval()) < 0){
+      printf("usertrap(): swap-in failed scause 0x%lx pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+      setkilled(p);
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -215,4 +222,3 @@ devintr()
     return 0;
   }
 }
-
