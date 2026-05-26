@@ -69,7 +69,6 @@ usertrap(void)
 
     syscall();
   } else if(scause == 12 || scause == 13 || scause == 15){
-    intr_on();
     if(stval >= p->sz || swapin(p->pagetable, stval) < 0){
       printf("usertrap(): swap-in failed scause 0x%lx pid=%d\n", scause, p->pid);
       printf("            sepc=0x%lx stval=0x%lx\n", sepc, stval);
