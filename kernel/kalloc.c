@@ -286,6 +286,7 @@ kfree(void *pa)
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
 // pa4: kalloc function
+// pa4: kalloc function
 void *
 kalloc(void)
 {
