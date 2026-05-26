@@ -396,9 +396,10 @@ int
 wait(uint64 addr)
 {
   struct proc *pp;
-  int havekids, pid;
+  int havekids, pid, xstate;
   struct proc *p = myproc();
 
+again:
   acquire(&wait_lock);
 
   for(;;){
@@ -413,12 +414,23 @@ wait(uint64 addr)
         if(pp->state == ZOMBIE){
           // Found one.
           pid = pp->pid;
-          if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate,
-                                  sizeof(pp->xstate)) < 0) {
-            release(&pp->lock);
-            release(&wait_lock);
+          xstate = pp->xstate;
+          release(&pp->lock);
+          release(&wait_lock);
+
+          if(addr != 0 && copyout(p->pagetable, addr, (char *)&xstate,
+                                  sizeof(xstate)) < 0) {
             return -1;
           }
+
+          acquire(&wait_lock);
+          acquire(&pp->lock);
+          if(pp->state != ZOMBIE || pp->pid != pid || pp->parent != p){
+            release(&pp->lock);
+            release(&wait_lock);
+            goto again;
+          }
+
           freeproc(pp);
           release(&pp->lock);
           release(&wait_lock);
