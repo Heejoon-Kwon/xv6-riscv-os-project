@@ -19,6 +19,7 @@
 #define DEALLOC_ROUNDS 4
 #define CHILDREN 4
 #define CHILD_PAGES 1024
+#define MULTI_PARENT_PAGES 2048
 
 static void
 fail(const char *test, const char *reason)
@@ -248,6 +249,7 @@ child_pressure(int child)
     for(i = 0; i < CHILD_PAGES; i++)
       base[i * PGSIZE + (round % 4)] ^= (char)(child + round);
   }
+  sleep(20);
   bad = verify_pages(base, CHILD_PAGES, 20 + child);
   if(bad >= 0)
     exit(1);
@@ -260,7 +262,8 @@ test5_multi(void)
 {
   const char *test = "test5 multi process pressure";
   int r0, w0, r1, w1;
-  int i, pid, st;
+  int i, pid, st, bad;
+  char *base;
 
   stats(&r0, &w0);
   for(i = 0; i < CHILDREN; i++){
@@ -271,12 +274,23 @@ test5_multi(void)
       child_pressure(i);
   }
 
+  sleep(20);
+  base = alloc_pages(test, MULTI_PARENT_PAGES);
+  fill_pages(base, MULTI_PARENT_PAGES, 40);
+  bad = verify_pages(base, MULTI_PARENT_PAGES, 40);
+  if(bad >= 0)
+    fail(test, "parent pressure data mismatch");
+
   for(i = 0; i < CHILDREN; i++){
     if(wait(&st) < 0)
       fail(test, "wait failed");
     if(st != 0)
       fail(test, "child failed");
   }
+  bad = verify_pages(base, MULTI_PARENT_PAGES, 40);
+  if(bad >= 0)
+    fail(test, "parent pressure changed");
+  free_pages(test, MULTI_PARENT_PAGES);
   stats(&r1, &w1);
   require_swap_activity(test, r0, w0, r1, w1);
   printf("%s: OK\n", test);
