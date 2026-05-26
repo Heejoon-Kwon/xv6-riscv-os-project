@@ -46,11 +46,14 @@ usertrap(void)
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
+  uint64 scause = r_scause();
+  uint64 sepc = r_sepc();
+  uint64 stval = r_stval();
   
   // save user program counter.
-  p->trapframe->epc = r_sepc();
+  p->trapframe->epc = sepc;
   
-  if(r_scause() == 8){
+  if(scause == 8){
     // system call
 
     if(killed(p))
@@ -65,18 +68,18 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if(r_scause() == 12 || r_scause() == 13 || r_scause() == 15){
+  } else if(scause == 12 || scause == 13 || scause == 15){
     intr_on();
-    if(r_stval() >= p->sz || swapin(p->pagetable, r_stval()) < 0){
-      printf("usertrap(): swap-in failed scause 0x%lx pid=%d\n", r_scause(), p->pid);
-      printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+    if(stval >= p->sz || swapin(p->pagetable, stval) < 0){
+      printf("usertrap(): swap-in failed scause 0x%lx pid=%d\n", scause, p->pid);
+      printf("            sepc=0x%lx stval=0x%lx\n", sepc, stval);
       setkilled(p);
     }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+    printf("usertrap(): unexpected scause 0x%lx pid=%d\n", scause, p->pid);
+    printf("            sepc=0x%lx stval=0x%lx\n", sepc, stval);
     setkilled(p);
   }
 
