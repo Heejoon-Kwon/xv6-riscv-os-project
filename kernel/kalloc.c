@@ -24,7 +24,6 @@ struct {
   struct run *freelist;
 } kmem;
 
-// pa4: struct for page control
 struct page pages[PHYSTOP/PGSIZE];
 struct page *page_lru_head;
 int num_free_pages;
