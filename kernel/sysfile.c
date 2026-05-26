@@ -510,20 +510,11 @@ sys_swapread(void)
 {
     uint64 ptr;
     int blkno;
-    char *mem;
-    struct proc *p = myproc();
 
     argaddr(0, &ptr);
     argint(1, &blkno);
 
-    if((mem = kalloc()) == 0)
-      return -1;
-    swapread((uint64)mem, blkno);
-    if(copyout(p->pagetable, ptr, mem, PGSIZE) < 0){
-      kfree(mem);
-      return -1;
-    }
-    kfree(mem);
+    swapread(ptr, blkno);
     return 0;  // swapread는 void이므로 성공 시 0 반환
 }
 
@@ -532,20 +523,11 @@ sys_swapwrite(void)
 {
     uint64 ptr;
     int blkno;
-    char *mem;
-    struct proc *p = myproc();
 
     argaddr(0, &ptr);
     argint(1, &blkno);
 
-    if((mem = kalloc()) == 0)
-      return -1;
-    if(copyin(p->pagetable, mem, ptr, PGSIZE) < 0){
-      kfree(mem);
-      return -1;
-    }
-    swapwrite((uint64)mem, blkno);
-    kfree(mem);
+    swapwrite(ptr, blkno);
     return 0;  // swapwrite도 마찬가지로 0 반환
 }
 

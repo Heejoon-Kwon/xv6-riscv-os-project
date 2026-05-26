@@ -7,6 +7,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "riscv.h"
+#include "proc.h"
 #include "defs.h"
 #include "fs.h"
 
@@ -24,6 +25,7 @@ struct {
   struct run *freelist;
 } kmem;
 
+// pa4: struct for page control
 struct page pages[PHYSTOP/PGSIZE];
 struct page *page_lru_head;
 int num_free_pages;
@@ -38,6 +40,7 @@ struct {
 
 #define BLKS_PER_PG (PGSIZE / BSIZE)
 #define NSWAPPG (SWAPMAX / BLKS_PER_PG)
+#define SWAPTMP (TRAPFRAME - PGSIZE)
 
 static struct page*
 pa2page(uint64 pa)
@@ -57,6 +60,34 @@ static int
 page_on_lru(struct page *page)
 {
   return page->next != 0;
+}
+
+static pte_t*
+swap_tmp_map(uint64 pa)
+{
+  struct proc *p;
+  pte_t *pte;
+
+  p = myproc();
+
+  if(p == 0 || p->pagetable == 0)
+    return 0;
+
+  pte = walk(p->pagetable, SWAPTMP, 0);
+  
+  if(pte == 0 || (*pte & PTE_V))
+    return 0;
+
+  *pte = PA2PTE(pa) | PTE_R | PTE_W | PTE_U | PTE_V;
+  sfence_vma();
+  return pte;
+}
+
+static void
+swap_tmp_unmap(pte_t *pte)
+{
+  *pte = 0;
+  sfence_vma();
 }
 
 static void
@@ -122,11 +153,13 @@ swapout(void)
   pagetable_t pagetable;
   uint64 va, pa;
   pte_t *pte;
+  pte_t *tmp_pte;
   uint flags;
   int slot;
 
   for(;;){
     acquire(&lru_lock);
+
     if(page_lru_head == 0){
       release(&lru_lock);
       return 0;
@@ -154,7 +187,16 @@ swapout(void)
     }
 
     slot = swap_slot_alloc();
+
     if(slot < 0){
+      release(&lru_lock);
+      return 0;
+    }
+
+    tmp_pte = swap_tmp_map(pa);
+
+    if(tmp_pte == 0){
+      swap_slot_free(slot);
       release(&lru_lock);
       return 0;
     }
@@ -165,7 +207,8 @@ swapout(void)
     lru_remove_locked(page);
     release(&lru_lock);
 
-    swapwrite(pa, slot);
+    swapwrite(SWAPTMP, slot);
+    swap_tmp_unmap(tmp_pte);
     return (void*)pa;
   }
 }
@@ -176,7 +219,9 @@ page_lru_add(pagetable_t pagetable, uint64 va, uint64 pa)
   struct page *page;
 
   page = pa2page(pa);
+  
   acquire(&lru_lock);
+  
   if(page_on_lru(page))
     lru_remove_locked(page);
 
@@ -212,9 +257,11 @@ swapin(pagetable_t pagetable, uint64 va)
   uint flags;
   int slot;
   char *mem;
+  pte_t *tmp_pte;
 
   va = PGROUNDDOWN(va);
   pte = walk(pagetable, va, 0);
+
   if(pte == 0 || !PTE_SWAPPED(*pte))
     return -1;
 
@@ -224,7 +271,15 @@ swapin(pagetable_t pagetable, uint64 va)
   if((mem = kalloc()) == 0)
     return -1;
 
-  swapread((uint64)mem, slot);
+  tmp_pte = swap_tmp_map((uint64)mem);
+
+  if(tmp_pte == 0){
+    kfree(mem);
+    return -1;
+  }
+
+  swapread(SWAPTMP, slot);
+  swap_tmp_unmap(tmp_pte);
   swap_slot_free(slot);
   *pte = PA2PTE((uint64)mem) | flags | PTE_V;
   sfence_vma();

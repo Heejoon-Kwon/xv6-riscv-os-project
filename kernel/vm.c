@@ -196,7 +196,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      panic("uvmunmap: walk"); 
     if(PTE_SWAPPED(*pte)){
       swap_slot_free(PTE2PA(*pte) >> PGSHIFT);
       *pte = 0;
