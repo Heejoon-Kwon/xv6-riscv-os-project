@@ -1,12 +1,12 @@
 # xv6-riscv: scheduling and virtual memory
 
-This branch contains two operating-systems assignments implemented on a newer
+This branch contains operating-systems extensions implemented on a newer
 xv6-riscv snapshot: an EEVDF-inspired scheduler with supporting system calls,
-and a virtual-memory extension covering lazy allocation and a small
-assignment-specific `mmap` interface.
+and a virtual-memory extension covering lazy allocation and a deliberately
+limited `mmap` interface.
 
 Page replacement is intentionally kept on
-[`feature/page_replacement`](https://github.com/Heejoon-Kwon/xv6-riscv-os-project/tree/feature/page_replacement).
+[`feature/page-replacement`](https://github.com/Heejoon-Kwon/xv6-riscv-os-project/tree/feature/page-replacement).
 That branch uses a different xv6 snapshot, timer path, disk layout, and test
 environment; the two branches are not intended to be merged.
 
@@ -101,8 +101,8 @@ There is no CI configuration in this branch; these are manual QEMU tests.
 
 ## Attribution
 
-This branch is coursework built on
+This branch contains custom extensions built on
 [MIT xv6-riscv](https://github.com/mit-pdos/xv6-riscv). The original xv6
 authors and contributors retain credit for the base kernel; see [`LICENSE`](../LICENSE).
-The descriptions above refer to the custom assignment changes, not to the
+The descriptions above refer to the custom extensions, not to the
 complete xv6 codebase.
