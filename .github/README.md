@@ -5,8 +5,8 @@ physical-page free list is exhausted, the allocator selects a user page with a
 global second-chance/clock policy, writes it to a reserved area of `fs.img`, and
 reuses the physical frame. A later access faults the page back into memory.
 
-The scheduler and separate virtual-memory assignment are kept on
-[`develop`](https://github.com/Heejoon-Kwon/xv6-riscv-os-project/tree/develop).
+The scheduler and separate virtual-memory implementation are kept on
+[`main`](https://github.com/Heejoon-Kwon/xv6-riscv-os-project/tree/main).
 That branch uses a different xv6 snapshot, timer path, disk layout, and test
 environment; the two branches are not intended to be merged.
 
@@ -70,7 +70,7 @@ With four blocks per 4 KiB page, this provides 7,000 swap slots.
 
 ## Build and run
 
-This branch must be built independently from `develop`.
+This branch must be built independently from `main`.
 
 ### Prerequisites
 
@@ -128,13 +128,13 @@ This is a teaching implementation, not a production virtual-memory subsystem.
 It uses one global replacement ring and synchronous I/O, and does not implement
 copy-on-write, asynchronous writeback, clustered I/O, per-process replacement,
 or a general swap device. The documented test configuration is single-core;
-no SMP scalability claim is made. The raw swap system calls are assignment test
+no SMP scalability claim is made. The raw swap system calls are test
 interfaces, not application-facing APIs.
 
 ## Attribution
 
-This branch is coursework built on
+This branch contains custom extensions built on
 [MIT xv6-riscv](https://github.com/mit-pdos/xv6-riscv). The original xv6
 authors and contributors retain credit for the base kernel; see [`LICENSE`](../LICENSE).
-The descriptions above refer to the custom assignment changes, not to the
+The descriptions above refer to the custom extensions, not to the
 complete xv6 codebase.
